@@ -1,0 +1,20 @@
+import String
+import stdlib
+
+class StringContainer {
+  let cont: String
+  fn new() => StringContainer {
+    return StringContainer {
+      cont: String::new()
+    }
+  }
+}
+
+fn main() {
+  let str_mem: StringContainer = StringContainer::new()
+  let char_arr: [char] = [char: 'a', 'b']
+  char_arr = [char: 'm', 'a']
+  println(char_arr[0])
+  str_mem.cont.buf = [char: 'a', 'a']
+  println(str_mem.cont.buf)
+}

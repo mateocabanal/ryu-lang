@@ -1,0 +1,6 @@
+class Integer {
+  let num: int
+  fn new(num: int) => Integer {
+    return Integer { num: num }
+  }
+}

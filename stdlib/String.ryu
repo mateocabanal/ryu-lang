@@ -1,0 +1,8 @@
+class String {
+  let buf: [char]
+  fn new() => String {
+    return String {
+      buf: [char: 'm', 'a', 't', 'e', 'o']
+    }
+  }
+}

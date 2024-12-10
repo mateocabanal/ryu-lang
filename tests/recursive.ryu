@@ -1,0 +1,15 @@
+import stdlib
+
+fn exit_at_5(cnt: int) {
+  if cnt == 5 {
+    return
+  } else {
+    print(cnt)
+    cnt += 1
+    exit_at_5(cnt)
+  }
+}
+
+fn main() {
+  exit_at_5(0)
+}

@@ -1,0 +1,12 @@
+import stdlib
+
+fn print_var() => string {
+  let msg: string = "Hello World"
+  return msg
+}
+
+fn main() {
+  let test: string = "Test"
+  print(test)
+  print(print_var())
+}

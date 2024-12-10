@@ -1,0 +1,23 @@
+import stdlib
+
+fn return_name() => string {
+  return "mateo"
+}
+
+fn check_cond() => bool {
+  return true
+}
+
+fn main() {
+  let name: string = return_name()
+  print(name == "mateo")
+  if name == "mateo" {
+    print("GOD!")
+  } else {
+    print("Fake prophet...")
+  }
+
+  if check_cond() {
+    print("TRUE!")
+  }
+}

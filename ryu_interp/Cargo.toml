@@ -1,0 +1,7 @@
+[package]
+name = "ryu_interp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ryu_core = { path = "../ryu_core" } 

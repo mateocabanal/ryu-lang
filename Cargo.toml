@@ -1,0 +1,3 @@
+[workspace]
+members = ["ryu_core", "ryu_interp"]
+resolver = "2"

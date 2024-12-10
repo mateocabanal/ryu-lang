@@ -1,0 +1,7 @@
+import stdlib
+
+fn main() {
+  let num: int = 8
+  let i: Integer = Integer::new(num)
+  print(i)
+}

@@ -1,0 +1,16 @@
+import stdlib
+
+fn fib(n: int) => int {
+    if (n <= 1) {
+      return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+  let fib_count: int = 0
+  while fib_count < 30 {
+    println("fib(" + fib_count + ") = " + fib(fib_count))
+    fib_count += 1
+  }
+}

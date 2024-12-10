@@ -1,0 +1,11 @@
+import String
+import Integer
+
+fn print(msg: string) {
+  __native_print(msg)
+}
+
+fn println(msg: string) {
+  __native_print(msg)
+  __native_print("\n")
+}
