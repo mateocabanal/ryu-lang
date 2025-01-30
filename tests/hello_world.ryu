@@ -7,6 +7,6 @@ fn print_var() => string {
 
 fn main() {
   let test: string = "Test"
-  print(test)
-  print(print_var())
+  println(test)
+  println(print_var())
 }

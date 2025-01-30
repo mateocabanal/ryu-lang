@@ -1,0 +1,7 @@
+import stdlib
+
+fn main() {
+  let arr: [int] = [int: 99, 6, 7]
+  arr[0] = 10
+  println(arr[0])
+}

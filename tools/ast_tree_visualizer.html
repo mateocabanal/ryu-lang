@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JSON to Tree</title>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      transition: background 0.3s, color 0.3s;
+      position: relative;
+    }
+
+    header {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      transition: height 0.3s, opacity 0.3s;
+    }
+
+    header.hidden {
+      display: none;
+    }
+
+    #jsonInput {
+      width: 100%;
+      height: 150px;
+      box-sizing: border-box;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 14px;
+      resize: vertical;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    select,
+    button {
+      background: var(--control-bg);
+      color: var(--control-text);
+      border: 1px solid var(--control-border);
+      border-radius: 4px;
+      padding: 5px 10px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    #chart {
+      flex: 1;
+      background: var(--chart-background);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .node rect {
+      stroke: var(--node-border-color);
+      stroke-width: 1px;
+      cursor: pointer;
+      rx: 6;
+      ry: 6;
+    }
+
+    .node.object rect {
+      fill: var(--object-node-bg);
+    }
+
+    .node.array rect {
+      fill: var(--array-node-bg);
+    }
+
+    .node.primitive rect {
+      fill: var(--primitive-node-bg);
+    }
+
+    .node text {
+      font-size: 12px;
+      text-anchor: middle;
+      dominant-baseline: central;
+      pointer-events: none;
+    }
+
+    .node tspan.key {
+      fill: var(--key-color);
+      font-weight: bold;
+    }
+
+    .node tspan.value-string {
+      fill: var(--value-string-color);
+    }
+
+    .node tspan.value-number {
+      fill: var(--value-number-color);
+    }
+
+    .node tspan.value-boolean {
+      fill: var(--value-boolean-color);
+    }
+
+    .node tspan.value-null {
+      fill: var(--value-null-color);
+      font-style: italic;
+    }
+
+    .link {
+      fill: none;
+      stroke: var(--link-color);
+      stroke-opacity: 0.6;
+      stroke-width: 1.5px;
+    }
+
+    .tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: var(--tooltip-bg-color);
+      color: #fff;
+      padding: 5px;
+      border-radius: 3px;
+      font-size: 12px;
+      display: none;
+      z-index: 10;
+    }
+
+    /* A button fixed at the top-right corner to toggle UI */
+    #toggleUIBtn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: var(--control-bg);
+      color: var(--control-text);
+      border: 1px solid var(--control-border);
+      border-radius: 4px;
+      padding: 5px 10px;
+      font-size: 14px;
+      cursor: pointer;
+      z-index: 999;
+    }
+
+    /* Default theme (Dark) */
+    body.dark {
+      --background-color: #333;
+      --chart-background: #333;
+      --tooltip-bg-color: rgba(0, 0, 0, 0.8);
+
+      --object-node-bg: #444;
+      --array-node-bg: #555;
+      --primitive-node-bg: #666;
+
+      --node-border-color: #aaa;
+      --text-color: #ddd;
+      --key-color: #ffa500;
+      --value-string-color: #7ec0ee;
+      --value-number-color: #ff7f50;
+      --value-boolean-color: #ffb6c1;
+      --value-null-color: #d3d3d3;
+      --link-color: #999;
+
+      --control-bg: #555;
+      --control-text: #eee;
+      --control-border: #666;
+
+      --node-padding: 12px;
+      --vertical-level-spacing: 60;
+
+      background: var(--background-color);
+      color: var(--text-color);
+    }
+
+    /* Light theme */
+    body.light {
+      --background-color: #f0f0f0;
+      --chart-background: #ffffff;
+      --tooltip-bg-color: rgba(0, 0, 0, 0.8);
+
+      --object-node-bg: #e0e0e0;
+      --array-node-bg: #d0d0d0;
+      --primitive-node-bg: #c0c0c0;
+
+      --node-border-color: #333;
+      --text-color: #333;
+      --key-color: #d2691e;
+      --value-string-color: #1e90ff;
+      --value-number-color: #ff4500;
+      --value-boolean-color: #db7093;
+      --value-null-color: #555;
+      --link-color: #999;
+
+      --control-bg: #fff;
+      --control-text: #333;
+      --control-border: #aaa;
+
+      --node-padding: 12px;
+      --vertical-level-spacing: 60;
+
+      background: var(--background-color);
+      color: var(--text-color);
+    }
+
+    /* Solarized theme */
+    body.solarized {
+      --background-color: #002b36;
+      --chart-background: #002b36;
+      --tooltip-bg-color: rgba(0, 43, 54, 0.9);
+
+      --object-node-bg: #073642;
+      --array-node-bg: #586e75;
+      --primitive-node-bg: #657b83;
+
+      --node-border-color: #839496;
+      --text-color: #eee8d5;
+      --key-color: #b58900;
+      --value-string-color: #2aa198;
+      --value-number-color: #d33682;
+      --value-boolean-color: #cb4b16;
+      --value-null-color: #93a1a1;
+      --link-color: #839496;
+
+      --control-bg: #073642;
+      --control-text: #eee8d5;
+      --control-border: #586e75;
+
+      --node-padding: 12px;
+      --vertical-level-spacing: 60;
+
+      background: var(--background-color);
+      color: var(--text-color);
+    }
+
+    /* Catppuccin Mocha theme */
+    body.catppuccin-mocha {
+      --background-color: #1e1e2e;
+      --chart-background: #1e1e2e;
+      --tooltip-bg-color: rgba(30, 30, 46, 0.8);
+
+      --object-node-bg: #45475a;
+      --array-node-bg: #585b70;
+      --primitive-node-bg: #313244;
+
+      --node-border-color: #7f849c;
+      --text-color: #cdd6f4;
+      --key-color: #fab387;
+      --value-string-color: #89b4fa;
+      --value-number-color: #a6e3a1;
+      --value-boolean-color: #f38ba8;
+      --value-null-color: #cba6f7;
+      --link-color: #9ca0b0;
+
+      --control-bg: #313244;
+      --control-text: #cdd6f4;
+      --control-border: #45475a;
+
+      --node-padding: 12px;
+      --vertical-level-spacing: 60;
+
+      background: var(--background-color);
+      color: var(--text-color);
+    }
+  </style>
+</head>
+
+<body class="catppuccin-mocha">
+  <header id="headerContainer">
+    <textarea id="jsonInput" placeholder="Paste your JSON here..."></textarea>
+    <div class="controls">
+      <label>Theme:
+        <select id="themeSelect">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="solarized">Solarized</option>
+          <option value="catppuccin-mocha" selected>Catppuccin Mocha</option>
+        </select>
+      </label>
+      <label>Orientation:
+        <select id="orientationSelect">
+          <option value="vertical" selected>Top-to-Bottom</option>
+          <option value="horizontal">Left-to-Right</option>
+        </select>
+      </label>
+      <button id="renderButton">Render Graph</button>
+      <button id="shareButton">Share</button>
+    </div>
+  </header>
+  <button id="toggleUIBtn">Hide UI</button>
+  <div id="chart"></div>
+  <div class="tooltip" id="tooltip"></div>
+
+  <script src="
+https://cdn.jsdelivr.net/npm/jsonminify@0.4.2/minify.json.min.js
+"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const chart = d3.select('#chart');
+    const tooltip = document.getElementById('tooltip');
+    const headerContainer = document.getElementById('headerContainer');
+    const toggleUIBtn = document.getElementById('toggleUIBtn');
+    let uiHidden = false;
+
+    function jsonToHierarchy(value, key = "(root)") {
+      if (value && typeof value === 'object') {
+        const isArray = Array.isArray(value);
+        const children = [];
+        if (isArray) {
+          value.forEach((v, i) => children.push(jsonToHierarchy(v, String(i))));
+        } else {
+          let keys = Object.keys(value).sort();
+          keys.forEach(k => {
+            children.push(jsonToHierarchy(value[k], k));
+          });
+        }
+        return {key: key, children: children, type: isArray ? "array" : "object"};
+      } else {
+        // Primitive
+        return {key: key, value: value, type: "primitive"};
+      }
+    }
+
+    function formatValueForDisplay(val) {
+      if (typeof val === 'string') {
+        return `"${val}"`;
+      }
+      return String(val);
+    }
+
+    function getLabelForMeasurement(d) {
+      if (d.data.type === "primitive") {
+        return d.data.key + ": " + formatValueForDisplay(d.data.value);
+      } else {
+        return d.data.key;
+      }
+    }
+
+    function getURLParam(name) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(name);
+    }
+
+    function measureNodeSizes(rootData) {
+      const offscreenSVG = d3.select('body').append('svg')
+        .attr('width', 0)
+        .attr('height', 0)
+        .style('position', 'absolute')
+        .style('left', '-9999px');
+
+      const tempG = offscreenSVG.append('g');
+      const root = d3.hierarchy(rootData);
+
+      const padding = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--node-padding')) || 12;
+
+      root.each(d => {
+        const label = getLabelForMeasurement(d);
+        const textEl = tempG.append('text').text(label).node();
+        const bbox = textEl.getBBox();
+        tempG.select('text').remove();
+        d.data._width = bbox.width + padding;
+        d.data._height = bbox.height + padding;
+      });
+
+      offscreenSVG.remove();
+      return root;
+    }
+
+    function renderTree(rootData, orientation) {
+      chart.selectAll('svg').remove();
+
+      const width = chart.node().clientWidth || 800;
+      const height = chart.node().clientHeight || 600;
+
+      let root = measureNodeSizes(rootData);
+
+      const levelSpacing = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vertical-level-spacing')) || 60;
+
+      const treeLayout = d3.tree()
+        .nodeSize([1, levelSpacing])
+        // Generous spacing
+        .separation((a, b) => ((a.data._width + b.data._width) / 2) + 50);
+
+      treeLayout(root);
+
+      if (orientation === 'horizontal') {
+        root.each(d => {
+          const oldX = d.x, oldY = d.y;
+          d.x = oldY;
+          d.y = oldX;
+        });
+      }
+
+      const svg = chart.append('svg')
+        .attr('width', width)
+        .attr('height', height);
+
+      const g = svg.append('g');
+
+      g.selectAll('.link')
+        .data(root.links())
+        .enter().append('path')
+        .attr('class', 'link')
+        .attr('d', d => {
+          if (orientation === 'vertical') {
+            return `M${d.source.x},${d.source.y}
+                    C${d.source.x},${(d.source.y + d.target.y) / 2} 
+                     ${d.target.x},${(d.source.y + d.target.y) / 2} 
+                     ${d.target.x},${d.target.y}`;
+          } else {
+            return `M${d.source.x},${d.source.y}
+                    C${(d.source.x + d.target.x) / 2},${d.source.y} 
+                     ${(d.source.x + d.target.x) / 2},${d.target.y} 
+                     ${d.target.x},${d.target.y}`;
+          }
+        });
+
+      const node = g.selectAll('.node')
+        .data(root.descendants())
+        .enter().append('g')
+        .attr('class', d => `node ${d.data.type}`)
+        .attr('transform', d => `translate(${d.x},${d.y})`)
+        .on('mouseover', (event, d) => {
+          tooltip.style.display = 'block';
+          if (d.data.type === "primitive") {
+            tooltip.innerHTML = `${d.data.key}: ${JSON.stringify(d.data.value)}`;
+          } else {
+            tooltip.innerHTML = d.data.key;
+          }
+        })
+        .on('mousemove', (event) => {
+          tooltip.style.left = (event.pageX + 10) + 'px';
+          tooltip.style.top = (event.pageY + 10) + 'px';
+        })
+        .on('mouseout', () => {
+          tooltip.style.display = 'none';
+        });
+
+      node.append('rect')
+        .attr('x', d => -d.data._width / 2)
+        .attr('y', d => -d.data._height / 2)
+        .attr('width', d => d.data._width)
+        .attr('height', d => d.data._height);
+
+      node.each(function (d) {
+        const el = d3.select(this).append('text');
+        if (d.data.type === "primitive") {
+          const val = d.data.value;
+          let valClass = "value-string";
+          let displayVal = val;
+          if (typeof val === 'string') {
+            displayVal = `"${val}"`;
+          }
+
+          if (typeof val === 'number') valClass = "value-number";
+          else if (typeof val === 'boolean') valClass = "value-boolean";
+          else if (val === null) valClass = "value-null";
+
+          el.append('tspan')
+            .attr('class', 'key')
+            .text(d.data.key + ": ");
+
+          el.append('tspan')
+            .attr('class', valClass)
+            .text(String(displayVal));
+        } else {
+          el.append('tspan')
+            .attr('class', 'key')
+            .text(d.data.key);
+        }
+      });
+
+      const zoom = d3.zoom()
+        .scaleExtent([0.2, 5])
+        .on("zoom", (event) => {
+          g.attr("transform", event.transform);
+        });
+
+      svg.call(zoom);
+
+      if (orientation === 'vertical') {
+        svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, 40));
+      } else {
+        svg.call(zoom.transform, d3.zoomIdentity.translate(60, height / 2));
+      }
+    }
+
+    function shareLink() {
+      let inputVal = document.getElementById('jsonInput').value.trim();
+      if (!inputVal) {
+        alert("No JSON to share.");
+        return;
+      }
+      try {
+        let parsed = JSON.parse(inputVal);
+        // Minimize JSON for sharing
+        let compactJSON = JSON.minify(JSON.stringify(parsed));
+
+        const encoded = encodeURIComponent(compactJSON);
+        const baseUrl = window.location.origin + window.location.pathname;
+        const shareUrl = baseUrl + "?json=" + encoded;
+        navigator.clipboard.writeText(shareUrl)
+          .then(() => {
+            alert("Shareable link copied to clipboard!");
+          })
+          .catch(() => {
+            alert("Failed to copy link. Please copy manually:\n" + shareUrl);
+          });
+      } catch (e) {
+        alert("Invalid JSON. Please correct it before sharing.");
+      }
+    }
+
+    document.getElementById('themeSelect').addEventListener('change', (event) => {
+      const val = event.target.value;
+      document.body.classList.remove('dark', 'light', 'solarized', 'catppuccin-mocha');
+      document.body.classList.add(val);
+    });
+
+    document.getElementById('renderButton').addEventListener('click', () => {
+      let inputVal = document.getElementById('jsonInput').value.trim();
+      let orientation = document.getElementById('orientationSelect').value;
+      if (!inputVal) return;
+      try {
+        let parsed = JSON.parse(inputVal);
+        let hierarchyData = jsonToHierarchy(parsed);
+        renderTree(hierarchyData, orientation);
+      } catch (e) {
+        alert("Invalid JSON. Please correct it and try again.");
+      }
+    });
+
+    document.getElementById('shareButton').addEventListener('click', shareLink);
+
+    toggleUIBtn.addEventListener('click', () => {
+      uiHidden = !uiHidden;
+      if (uiHidden) {
+        headerContainer.classList.add('hidden');
+        toggleUIBtn.textContent = 'Show UI';
+      } else {
+        headerContainer.classList.remove('hidden');
+        toggleUIBtn.textContent = 'Hide UI';
+      }
+    });
+
+    (function () {
+      const jsonParam = getURLParam('json');
+      if (jsonParam) {
+        try {
+          const decodedJSON = decodeURIComponent(jsonParam);
+          const parsed = JSON.parse(decodedJSON);
+          document.getElementById('jsonInput').value = JSON.stringify(parsed, null, 2);
+          let orientation = document.getElementById('orientationSelect').value;
+          let hierarchyData = jsonToHierarchy(parsed);
+          renderTree(hierarchyData, orientation);
+        } catch (e) {
+          console.warn("Failed to parse JSON from URL:", e);
+        }
+      }
+    })();
+  </script>
+</body>
+
+</html>

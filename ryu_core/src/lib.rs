@@ -4,10 +4,13 @@ pub mod ast;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
+pub mod primitives;
 pub mod token;
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Borrow;
+
     use ast::{print_ast, AstNode, AST};
     use interpreter::Interpreter;
     use lexer::Lexer;
@@ -88,8 +91,7 @@ mod tests {
         let ast = AST::new(program_node);
         let mut interpreter = Interpreter::new();
 
-        let ast_node: Box<dyn AstNode> = Box::new(ast.program.clone());
-        print_ast(&ast_node);
+        print_ast(&ast);
         interpreter.run(&ast);
     }
 
@@ -106,8 +108,7 @@ mod tests {
         let ast = AST::new(program_node);
         let mut interpreter = Interpreter::new();
 
-        let ast_node: Box<dyn AstNode> = Box::new(ast.program.clone());
-        print_ast(&ast_node);
+        print_ast(&ast);
         interpreter.run(&ast);
     }
 }

@@ -8,13 +8,13 @@ class StringContainer {
       cont: String::new()
     }
   }
+
+  fn print_test(self) {
+    println(self.cont)
+  }
 }
 
 fn main() {
   let str_mem: StringContainer = StringContainer::new()
-  let char_arr: [char] = [char: 'a', 'b']
-  char_arr = [char: 'm', 'a']
-  println(char_arr[0])
-  str_mem.cont.buf = [char: 'a', 'a']
-  println(str_mem.cont.buf)
+  str_mem.print_test()
 }

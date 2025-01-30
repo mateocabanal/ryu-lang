@@ -160,6 +160,21 @@ impl Lexer {
                         }
                     }
 
+                    '/' => {
+                        if tok == '/' {
+                            self.next += 2;
+                            while let Some(c) = self.file.get(self.next) {
+                                self.next += 1;
+                                if *c == '\n' {
+                                    break;
+                                }
+                            }
+                            Ok(None)
+                        } else {
+                            Ok(Some(Token::Div))
+                        }
+                    }
+
                     _ => {
                         let res = match tok {
                             '<' => Token::Less,
@@ -309,6 +324,7 @@ impl Lexer {
                             || c == '}'
                             || c == '='
                             || c == '.'
+                            || c == ','
                             || c == ':'
                             || c == '['
                             || c == ']'

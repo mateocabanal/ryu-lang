@@ -33,7 +33,7 @@ impl ToString for Value {
 }
 
 use crate::ast::*;
-use std::{collections::HashMap, fmt::write};
+use std::{borrow::Borrow, collections::HashMap, fmt::write};
 
 /// Represents control flow changes like `return` that need to unwind the call stack.
 #[derive(Debug)]
@@ -152,8 +152,12 @@ impl Interpreter {
 
         if let Some(call) = any_node.downcast_ref::<FunctionCallNode>() {
             self.eval_function_call_node(call)
-        } else if let Some(method_call) = any_node.downcast_ref::<ClassMethodCall>() {
-            self.eval_class_method_node(method_call)
+        } else if let Some(method_call) = any_node.downcast_ref::<MethodCallNode>() {
+            self.eval_method_call_node(method_call)
+        } else if let Some(call) = any_node.downcast_ref::<ClassMethodCall>() {
+            self.eval_class_method_node(call)
+        } else if let Some(static_method_call) = any_node.downcast_ref::<StaticMethodCallNode>() {
+            self.eval_static_method_call_node(static_method_call)
         } else if let Some(member_field_access) = any_node.downcast_ref::<ClassFieldAccess>() {
             self.eval_class_member_access(member_field_access)
         } else if let Some(member_init) = any_node.downcast_ref::<ClassMemberInit>() {
@@ -176,6 +180,8 @@ impl Interpreter {
             self.eval_array_literal_node(alit)
         } else if let Some(arr_acc) = any_node.downcast_ref::<ArrayAccessNode>() {
             self.eval_array_access_node(arr_acc)
+        } else if let Some(arr_ass) = any_node.downcast_ref::<ArrayAssignmentNode>() {
+            self.eval_array_assignment_node(arr_ass)
         } else if let Some(binop) = any_node.downcast_ref::<BinaryOpNode>() {
             self.eval_binary_op_node(binop)
         } else if let Some(if_node) = any_node.downcast_ref::<IfNode>() {
@@ -184,12 +190,119 @@ impl Interpreter {
             self.eval_while_node(while_node)
         } else if let Some(ret) = any_node.downcast_ref::<ReturnNode>() {
             self.eval_return_node(ret)
+        } else if let Some(self_field_access) = any_node.downcast_ref::<SelfFieldAccessNode>() {
+            self.eval_self_field_access(self_field_access)
         } else {
             panic!("Unhandled AST node type in eval_node: {node:?}");
         }
     }
 
-    // TODO: Review this code from o1
+    fn eval_self_field_access(&mut self, node: &SelfFieldAccessNode) -> Result<Value, ControlFlow> {
+        // Get the 'self' object from the environment
+        let self_object = self
+            .env
+            .get("self")
+            .cloned()
+            .expect("Self not found in environment");
+
+        // Ensure 'self' is an object
+        if let Value::Object(obj) = self_object {
+            // Get the field name
+            let field_name = &node.field.name;
+
+            // Access the field in the object
+            if let Some(value) = obj.members.get(field_name) {
+                Ok(value.clone())
+            } else {
+                panic!("Field '{field_name}' not found in object");
+            }
+        } else {
+            panic!("'self' is not an object");
+        }
+    }
+
+    fn eval_static_method_call_node(
+        &mut self,
+        call: &StaticMethodCallNode,
+    ) -> Result<Value, ControlFlow> {
+        // 1. Look up the class
+        let class_name = call.class.as_any().downcast_ref::<IdentNode>().unwrap();
+        let Some(class_lookup) = self.classes.get(&call.class) else {
+            panic!("Class '{}' not found", class_name.name);
+        };
+
+        // 2. Find the static method in the class definition
+        let method_name = &call.method.name;
+        let mut class_method: Option<ClassMethodNode> = None;
+        for member in class_lookup.tokens.iter() {
+            if let Some(m) = member.as_any().downcast_ref::<ClassMethodNode>() {
+                if m.name.name == *method_name {
+                    class_method = Some(m.clone());
+                    break;
+                }
+            }
+        }
+
+        let Some(class_method) = class_method else {
+            panic!(
+                "Static method '{}' not found in class '{}'",
+                method_name, class_name.name
+            );
+        };
+
+        // 3. Evaluate the method arguments
+        let arg_values: Vec<Value> = call
+            .args
+            .iter()
+            .map(|a| self.eval_node(a).unwrap())
+            .collect();
+
+        // 4. Check if the number of arguments matches
+        if class_method.args.len() != arg_values.len() {
+            panic!(
+                "Method '{}' expected {} arguments, got {}",
+                method_name,
+                class_method.args.len(),
+                arg_values.len()
+            );
+        }
+
+        // 5. Create a new environment for the method call (no 'self' for static methods)
+        let old_env = self.env.clone();
+        self.env.clear();
+
+        // 6. Assign arguments to parameters
+        for (i, arg_def) in class_method.args.iter().enumerate() {
+            self.env
+                .insert(arg_def.name.name.clone(), arg_values[i].clone());
+        }
+
+        // 7. Evaluate the body of the method
+        let mut last_value = Value::Unit;
+        for stmt in &class_method.body {
+            match self.eval_node(stmt) {
+                Ok(val) => last_value = val,
+                Err(ControlFlow::Return(rv)) => {
+                    self.env = old_env;
+                    return Ok(rv);
+                }
+            }
+        }
+
+        // 8. Check the return type
+        if last_value.to_string() != class_method.return_type.name {
+            panic!(
+                "Expected {} return type, got: {}",
+                class_method.return_type.name,
+                last_value.to_string()
+            );
+        }
+
+        // 9. Restore the environment
+        self.env = old_env;
+        Ok(last_value)
+    }
+
     fn eval_class_member_access(
         &mut self,
         member_access: &ClassFieldAccess,
@@ -201,29 +314,95 @@ impl Interpreter {
         // Now 'field_names' should have the list of names starting from the base object
 
         // Evaluate the base object
-        let base_name = field_names.first().unwrap().clone();
-        let mut current_value = self.env.get(&base_name).cloned().unwrap_or(Value::Unit);
+        let base_name_node = field_names.first().unwrap(); // Still a Box<dyn AstNode>
+
+        // Downcast to IdentNode for HashMap lookup
+        let base_name =
+            if let Some(ident_node) = base_name_node.as_any().downcast_ref::<IdentNode>() {
+                &ident_node.name
+            } else {
+                panic!("Base name of member access is not an IdentNode");
+            };
+
+        // Lookup in environment using the downcasted name (String)
+        let mut current_value = match self.env.get(base_name) {
+            Some(v) => v.clone(),
+            None => {
+                panic!("Class not found")
+            }
+        };
 
         // Traverse the fields
         for field_name in field_names.iter().skip(1) {
-            if let Value::Object(obj) = &current_value {
-                if let Some(val) = obj.members.get(field_name) {
-                    current_value = val.clone();
-                } else {
-                    panic!("Field '{}' not found in object '{}'", field_name, obj.name);
+            if let Value::Object(obj) = current_value.clone() {
+                if let Some(ident) = field_name.as_any().downcast_ref::<IdentNode>() {
+                    if let Some(val) = obj.members.get(&ident.name) {
+                        current_value = val.clone();
+                    } else {
+                        panic!(
+                            "Field '{:?}' not found in object '{:?}'",
+                            field_name, obj.name
+                        );
+                    }
+                } else if let Some(fn_call) = field_name.as_any().downcast_ref::<ClassMethodCall>()
+                {
+                    let value = self.eval_class_method_node(fn_call)?;
+                    current_value = value;
                 }
             } else {
-                panic!("Cannot access field '{}' on non-object value", field_name);
+                panic!("Cannot access field '{:?}' on non-object value", field_name);
             }
         }
 
         Ok(current_value)
     }
 
+    fn call_static_method(
+        &mut self,
+        method: &ClassMethodNode,
+        args: Vec<Value>,
+    ) -> Result<Value, ControlFlow> {
+        // Check if the number of arguments matches
+        if method.args.len() != args.len() {
+            panic!(
+                "Method '{}' expected {} arguments, but got {}",
+                method.name.name,
+                method.args.len(),
+                args.len()
+            );
+        }
+
+        // Create a new environment for the method call
+        let old_env = self.env.clone();
+        self.env.clear();
+
+        // Assign arguments to parameters
+        for (arg_def, arg_value) in method.args.iter().zip(args.into_iter()) {
+            self.env.insert(arg_def.name.name.clone(), arg_value);
+        }
+
+        // Evaluate the body of the method
+        let mut last_value = Value::Unit;
+        for stmt in &method.body {
+            match self.eval_node(stmt) {
+                Ok(val) => last_value = val,
+                Err(ControlFlow::Return(rv)) => {
+                    self.env = old_env;
+                    return Ok(rv);
+                }
+            }
+        }
+
+        // Restore the environment
+        self.env = old_env;
+
+        Ok(last_value)
+    }
+
     fn collect_field_names(
         &mut self,
         node: &dyn AstNode,
-        field_names: &mut Vec<String>,
+        field_names: &mut Vec<Box<dyn AstNode>>,
     ) -> Result<(), ControlFlow> {
         if let Some(class_field_access) = node.as_any().downcast_ref::<ClassFieldAccess>() {
             // Process 'member' first
@@ -231,9 +410,9 @@ impl Interpreter {
             // Then process 'field'
             self.collect_field_names(&*class_field_access.field, field_names)?;
         } else if let Some(ident_node) = node.as_any().downcast_ref::<IdentNode>() {
-            field_names.push(ident_node.name.clone());
-        // } else if let Some(function_node) = node.as_any().downcast_ref::<FunctionCallNode>() {
-        //     field_names.push(
+            field_names.push(ident_node.clone_box());
+        } else if let Some(class_method) = node.as_any().downcast_ref::<ClassMethodCall>() {
+            field_names.push(class_method.clone_box());
         } else {
             panic!("Expected IdentNode or ClassFieldAccess, got {:?}", node);
         }
@@ -278,71 +457,85 @@ impl Interpreter {
         })))
     }
 
-    fn eval_class_method_node(&mut self, call: &ClassMethodCall) -> Result<Value, ControlFlow> {
-        let class_name = call.member.clone();
-        let method_name = call.method.clone();
+    fn eval_method_call_node(&mut self, call: &MethodCallNode) -> Result<Value, ControlFlow> {
+        // Evaluate the object
+        let object_value = self.eval_node(&call.object)?;
 
-        let Some(class_name) = class_name.as_any().downcast_ref::<IdentNode>() else {
-            panic!(
-                "member field of ClassMethodCall is not an IdentNode, got: {:?}",
-                call.member
-            );
+        // Ensure the object is a Value::Object
+        let Value::Object(object) = object_value else {
+            panic!("Method called on a non-object value");
         };
 
-        let Some(class_lookup) = self.classes.get(class_name) else {
-            panic!("Class could not be looked up!");
+        // Look up the class definition
+        let class_name = IdentNode {
+            name: object.name.clone(),
+        };
+        let Some(class_lookup) = self.classes.get(&Box::new(class_name)) else {
+            panic!("Class '{}' not found", object.name);
         };
 
+        // Find the method in the class definition
+        let method_name = &call.method.name;
         let mut class_method: Option<ClassMethodNode> = None;
         for member in class_lookup.tokens.iter() {
-            let as_any = member.as_any();
-            if let Some(m) = as_any.downcast_ref::<ClassMethodNode>() {
-                if m.name == method_name {
-                    class_method = Some(m.clone())
+            if let Some(m) = member.as_any().downcast_ref::<ClassMethodNode>() {
+                if m.name.name == *method_name {
+                    class_method = Some(m.clone());
+                    break;
                 }
             }
         }
 
         let Some(class_method) = class_method else {
-            panic!("Could not find method: {method_name:?}");
+            panic!(
+                "Method '{}' not found in class '{}'",
+                method_name, object.name
+            );
         };
 
+        // Evaluate the method arguments
         let arg_values: Vec<Value> = call
             .args
             .iter()
             .map(|a| self.eval_node(a).unwrap())
             .collect();
 
-        if class_method.args.len() != arg_values.len() {
+        // Check if the number of arguments matches, considering 'self'
+        if class_method.args.len() != arg_values.len() + 1 {
             panic!(
-                "Function '{}' expected {} args, got {}",
-                method_name.name,
+                "Method '{}' expected {} arguments, got {}",
+                method_name,
                 class_method.args.len(),
-                arg_values.len()
+                arg_values.len() + 1
             );
         }
 
+        // Create a new environment for the method call
         let old_env = self.env.clone();
         self.env.clear();
 
-        // Assign arguments to parameters
-        for (i, arg_def) in class_method.args.iter().enumerate() {
+        // Add 'self' as the first argument
+        self.env.insert("self".to_string(), Value::Object(object));
+
+        // Assign arguments to parameters, skipping 'self'
+        for (i, arg_def) in class_method.args.iter().skip(1).enumerate() {
             self.env
                 .insert(arg_def.name.name.clone(), arg_values[i].clone());
         }
 
+        // Evaluate the body of the method
         let mut last_value = Value::Unit;
         for stmt in &class_method.body {
             match self.eval_node(stmt) {
                 Ok(val) => last_value = val,
                 Err(ControlFlow::Return(rv)) => {
-                    // On return, restore old env and return immediately
                     self.env = old_env;
                     return Ok(rv);
                 }
             }
         }
 
+        // Check the return type
         if last_value.to_string() != class_method.return_type.name {
             panic!(
                 "Expected {} return type, got: {}",
@@ -351,6 +544,116 @@ impl Interpreter {
             );
         }
 
+        // Restore the environment
+        self.env = old_env;
+        Ok(last_value)
+    }
+
+    fn eval_class_method_node(&mut self, call: &ClassMethodCall) -> Result<Value, ControlFlow> {
+        // Get the class name and method name
+        let method_name = call.method.clone();
+
+        // Collect the field names recursively to find the object
+        let mut field_names = Vec::new();
+        self.collect_field_names(call.object.borrow(), &mut field_names)?;
+
+        // Evaluate the base object
+        let base_name = field_names.first().unwrap().clone();
+        let mut current_value = self
+            .env
+            .get(&base_name.as_any().downcast_ref::<IdentNode>().unwrap().name)
+            .cloned()
+            .unwrap_or(Value::Unit);
+
+        // Traverse the fields to get the object on which the method is called
+        for field_name in field_names.iter().skip(1) {
+            if let Value::Object(obj) = current_value {
+                if let Some(ident) = field_name.as_any().downcast_ref::<IdentNode>() {
+                    if let Some(val) = obj.members.get(&ident.name) {
+                        current_value = val.clone();
+                    } else {
+                        return Err(ControlFlow::Return(Value::Unit));
+                    }
+                } else {
+                    return Err(ControlFlow::Return(Value::Unit));
+                }
+            } else {
+                return Err(ControlFlow::Return(Value::Unit));
+            }
+        }
+
+        // Ensure the current value is an object
+        let Value::Object(object) = current_value else {
+            return Err(ControlFlow::Return(Value::Unit));
+        };
+
+        // Look up the class definition
+        let class_name = IdentNode {
+            name: object.name.clone(),
+        };
+        let Some(class_lookup) = self.classes.get(&Box::new(class_name)) else {
+            panic!("Class could not be looked up!");
+        };
+
+        // Find the method in the class definition
+        let mut class_method: Option<ClassMethodNode> = None;
+        for member in class_lookup.tokens.iter() {
+            if let Some(m) = member.as_any().downcast_ref::<ClassMethodNode>() {
+                if m.name == method_name {
+                    class_method = Some(m.clone());
+                    break;
+                }
+            }
+        }
+
+        let Some(class_method) = class_method else {
+            panic!("Could not find method: {method_name:?}");
+        };
+
+        // Evaluate the method arguments
+        let arg_values: Vec<Value> = call
+            .args
+            .iter()
+            .map(|a| self.eval_node(a).unwrap())
+            .collect();
+
+        // Check if the number of arguments matches, considering 'self'
+        if class_method.args.len() != arg_values.len() + 1 {
+            panic!(
+                "Method '{}' expected {} arguments, got {}",
+                method_name.name,
+                class_method.args.len(),
+                arg_values.len() + 1
+            );
+        }
+
+        // Create a new environment for the method call
+        let old_env = self.env.clone();
+        self.env.clear();
+
+        // Add 'self' as the first argument
+        self.env.insert("self".to_string(), Value::Object(object));
+
+        // Assign arguments to parameters
+        for (i, arg_def) in class_method.args.iter().skip(1).enumerate() {
+            self.env
+                .insert(arg_def.name.name.clone(), arg_values[i].clone());
+        }
+
+        // Evaluate the body of the method
+        let mut last_value = Value::Unit;
+        for stmt in &class_method.body {
+            match self.eval_node(stmt) {
+                Ok(val) => last_value = val,
+                Err(ControlFlow::Return(rv)) => {
+                    self.env = old_env;
+                    return Ok(rv);
+                }
+            }
+        }
+
+        // TODO:  Check the return type
+        // Restore the environment
         self.env = old_env;
         Ok(last_value)
     }
@@ -379,7 +682,7 @@ impl Interpreter {
         };
 
         let Some(indexed_val) = var.get(index as usize).cloned() else {
-            panic!("Index is out of bounds");
+            panic!("Index `{index}` is out of bounds");
         };
 
         Ok(indexed_val)
@@ -492,6 +795,28 @@ impl Interpreter {
         }
     }
 
+    fn eval_array_assignment_node(
+        &mut self,
+        assign: &ArrayAssignmentNode,
+    ) -> Result<Value, ControlFlow> {
+        let array = &assign.left;
+
+        let Value::Int(index) = self.eval_node(&array.index)? else {
+            panic!("Index does not evaluate to an Int");
+        };
+
+        let rvalue = self.eval_node(&assign.right)?;
+
+        let variable = self.env.get_mut(&array.arr_name.name).unwrap();
+        let Value::Array(ref mut var) = variable else {
+            panic!("Tried indexing into something that isn't an array");
+        };
+
+        var[index as usize] = rvalue;
+
+        Ok(Value::Unit)
+    }
+
     /// Evaluates an `AssignmentNode`. The `operator` might be `MulAssign`, `AddAssign`, or `SubAssign`.
     /// We:
     /// 1. Evaluate the left and right sides.
@@ -562,19 +887,37 @@ impl Interpreter {
 
         // Evaluate the base object
         let base_name = field_names.first().unwrap().clone();
-        let mut current_value = self.env.get_mut(&base_name).unwrap();
+        let mut current_value = self
+            .env
+            .get_mut(&base_name.as_any().downcast_ref::<IdentNode>().unwrap().name)
+            .unwrap();
 
         // Traverse to the last object
         for field_name in field_names.iter().skip(1).take(field_names.len() - 2) {
             if let Value::Object(obj) = current_value {
-                current_value = obj.members.get_mut(field_name).unwrap();
+                current_value = obj
+                    .members
+                    .get_mut(
+                        &field_name
+                            .as_any()
+                            .downcast_ref::<IdentNode>()
+                            .unwrap()
+                            .name,
+                    )
+                    .unwrap();
             } else {
-                panic!("Cannot access field '{}' on non-object value", field_name);
+                panic!("Cannot access field '{:?}' on non-object value", field_name);
             }
         }
 
         // Now current_value is a reference to the object containing the field to assign
-        let last_field_name = field_names.last().unwrap();
+        let last_field_name = &field_names
+            .last()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<IdentNode>()
+            .unwrap()
+            .name;
 
         if let Value::Object(obj) = current_value {
             match operator.operator {
@@ -649,7 +992,10 @@ impl Interpreter {
 
     /// Evaluates an identifier by looking it up in the environment.
     fn eval_ident_node(&mut self, ident: &IdentNode) -> Value {
-        self.env.get(&ident.name).cloned().unwrap_or(Value::Unit)
+        self.env
+            .get_mut(&ident.name)
+            .cloned()
+            .unwrap_or(Value::Unit)
     }
 
     /// Evaluates a string literal node.

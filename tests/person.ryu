@@ -1,0 +1,27 @@
+import stdlib
+
+class Person {
+  let name: string
+  let age: int
+
+  fn new(u_name: string, u_age: int) => Person {
+    return Person {
+      name: u_name,
+      age: u_age
+    }
+  }
+
+  fn greet(self) => string {
+    return "Hello, my name is " + self.name + " and I am " + self.age + " years old."
+  }
+}
+
+fn main() {
+  let person: Person = Person::new("Mateo", 30)
+
+  println(person)
+
+  let greeting: string = person.greet()
+  println(greeting)
+}
+

@@ -208,6 +208,19 @@ impl AstNode for ArrayAccessNode {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ArrayAssignmentNode {
+    pub operator: AssignOperator,
+    pub left: Box<ArrayAccessNode>,
+    pub right: Box<dyn AstNode>,
+}
+
+impl AstNode for ArrayAssignmentNode {
+    fn clone_box(&self) -> Box<dyn AstNode> {
+        Box::new(self.clone())
+    }
+}
+
 /// `BinaryOperator` is an enum representing different kinds of binary operations
 /// your language supports. For example, `Add` corresponds to the `+` operator,
 /// `Sub` to `-`, `Mul` to `*`, and `Div` to `/`. You can extend this enum with
@@ -343,9 +356,47 @@ pub struct ClassMethodNode {
     pub args: Vec<ClassMethodArgNode>,
     pub return_type: Box<IdentNode>,
     pub body: Vec<Box<dyn AstNode>>,
+    pub is_static: bool,
 }
 
 impl AstNode for ClassMethodNode {
+    fn clone_box(&self) -> Box<dyn AstNode> {
+        Box::new(self.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MethodCallNode {
+    pub object: Box<dyn AstNode>,
+    pub method: Box<IdentNode>,
+    pub args: Vec<Box<dyn AstNode>>,
+}
+
+impl AstNode for MethodCallNode {
+    fn clone_box(&self) -> Box<dyn AstNode> {
+        Box::new(self.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StaticMethodCallNode {
+    pub class: Box<IdentNode>,
+    pub method: Box<IdentNode>,
+    pub args: Vec<Box<dyn AstNode>>,
+}
+
+impl AstNode for StaticMethodCallNode {
+    fn clone_box(&self) -> Box<dyn AstNode> {
+        Box::new(self.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SelfFieldAccessNode {
+    pub field: Box<IdentNode>,
+}
+
+impl AstNode for SelfFieldAccessNode {
     fn clone_box(&self) -> Box<dyn AstNode> {
         Box::new(self.clone())
     }
@@ -356,6 +407,7 @@ pub struct ClassFieldAssignmentNode {
     pub assign_operator: Box<AssignOperator>,
     pub field: Box<IdentNode>,
     pub member: Box<dyn AstNode>,
+    pub value: Box<dyn AstNode>,
 }
 
 impl AstNode for ClassFieldAssignmentNode {
@@ -378,7 +430,7 @@ impl AstNode for ClassFieldAccess {
 
 #[derive(Clone, Debug)]
 pub struct ClassMethodCall {
-    pub member: Box<dyn AstNode>,
+    pub object: Box<dyn AstNode>,
     pub method: Box<IdentNode>,
     pub args: Vec<Box<dyn AstNode>>,
 }
@@ -464,6 +516,26 @@ fn print_ast_with_indent(node: &dyn AstNode, writer: &mut String, indent: usize)
             indentation, class_field.left.name, class_field.var_type.name
         )
         .unwrap();
+    } else if let Some(self_class_field) = any_node.downcast_ref::<SelfFieldAccessNode>() {
+        writeln!(
+            writer,
+            "{}SelfFieldAccessNode field={}",
+            indentation, self_class_field.field.name
+        )
+        .unwrap();
+    } else if let Some(static_method_call) = any_node.downcast_ref::<StaticMethodCallNode>() {
+        writeln!(
+            writer,
+            "{}StaticMethodCallNode class={} method={}",
+            indentation, static_method_call.class.name, static_method_call.method.name
+        )
+        .unwrap();
+        if !static_method_call.args.is_empty() {
+            writeln!(writer, "{}  Arguments:", indentation).unwrap();
+            for arg in &static_method_call.args {
+                print_ast_with_indent(arg.borrow(), writer, indent + 2);
+            }
+        }
     } else if let Some(class_method) = any_node.downcast_ref::<ClassMethodNode>() {
         writeln!(
             writer,
@@ -493,7 +565,7 @@ fn print_ast_with_indent(node: &dyn AstNode, writer: &mut String, indent: usize)
             "{}ClassMethodCallNode member={} method={}",
             indentation,
             method_call
-                .member
+                .object
                 .as_any()
                 .downcast_ref::<IdentNode>()
                 .unwrap()
@@ -569,7 +641,12 @@ fn print_ast_with_indent(node: &dyn AstNode, writer: &mut String, indent: usize)
             writeln!(writer, "{}  (no value)", indentation).unwrap();
         }
     } else if let Some(binop) = any_node.downcast_ref::<BinaryOpNode>() {
-        writeln!(writer, "{}BinaryOpNode {:?}", indentation, binop.operator).unwrap();
+        writeln!(
+            writer,
+            "{}BinaryOpNode operator={:?}",
+            indentation, binop.operator
+        )
+        .unwrap();
         writeln!(writer, "{}  Left:", indentation).unwrap();
         print_ast_with_indent(binop.left.borrow(), writer, indent + 2);
         writeln!(writer, "{}  Right:", indentation).unwrap();
@@ -603,6 +680,12 @@ fn print_ast_with_indent(node: &dyn AstNode, writer: &mut String, indent: usize)
         print_ast_with_indent(arr_acc.arr_name.clone_box().borrow(), writer, indent + 2);
         writeln!(writer, "{}  Index:", indentation).unwrap();
         print_ast_with_indent(arr_acc.index.borrow(), writer, indent + 2);
+    } else if let Some(arr_ass) = any_node.downcast_ref::<ArrayAssignmentNode>() {
+        writeln!(writer, "{}ArrayAssignmentNode", indentation).unwrap();
+        writeln!(writer, "{}  ArrayAccess:", indentation).unwrap();
+        print_ast_with_indent(arr_ass.left.clone_box().borrow(), writer, indent + 2);
+        writeln!(writer, "{}  Assignment:", indentation).unwrap();
+        print_ast_with_indent(arr_ass.right.borrow(), writer, indent + 2);
     } else if let Some(ident) = any_node.downcast_ref::<IdentNode>() {
         writeln!(writer, "{}IdentNode {}", indentation, ident.name).unwrap();
     } else if let Some(assign) = any_node.downcast_ref::<AssignmentNode>() {

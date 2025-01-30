@@ -1,5 +1,21 @@
 import stdlib
 
+fn fib_nonrecursive(n: int) => int {
+  let cur: int = 0
+  let next: int = 1
+  let placeholder: int = 0
+
+  let fib_count: int = 0
+  while (fib_count < n) {
+    println("fib(" + (fib_count + 1) + ") = " + cur)
+    placeholder = next
+    next = cur + next
+    cur = placeholder
+    fib_count += 1
+  }
+}
+
+// Recursive functions destroy performace
 fn fib(n: int) => int {
     if (n <= 1) {
       return n
@@ -8,9 +24,5 @@ fn fib(n: int) => int {
 }
 
 fn main() {
-  let fib_count: int = 0
-  while fib_count < 30 {
-    println("fib(" + fib_count + ") = " + fib(fib_count))
-    fib_count += 1
-  }
+  fib_nonrecursive(1000)
 }

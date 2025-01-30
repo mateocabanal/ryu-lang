@@ -89,20 +89,42 @@ impl Parser {
         while !self.is_at_end() {
             match self.peek_token() {
                 Some(Token::Import) => {
-                    let (extern_fns, extern_classes) = self.parse_import()?;
+                    let (extern_fns, extern_classes) = match self.parse_import() {
+                        Ok((a, b)) => (a, b),
+                        Err(e) => {
+                            return Err(Box::new(ParseError {
+                                message: format!("Import Error: {e:?}"),
+                            }))
+                        }
+                    };
                     functions.extend(extern_fns);
                     classes.extend(extern_classes);
                 }
 
                 Some(Token::Class) => {
-                    let class = self.parse_class_decl()?;
+                    let class = match self.parse_class_decl() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return Err(Box::new(ParseError {
+                                message: format!("Class Error: {e:?}"),
+                            }))
+                        }
+                    };
                     let class_as_any = class.clone_box();
                     classes.insert(class.name, class_as_any);
                 }
 
                 Some(Token::Function(_)) => {
                     // Found a function declaration token, parse it fully.
-                    let func = self.parse_function_decl()?;
+                    let func = match self.parse_function_decl() {
+                        Ok(f) => f,
+                        Err(e) => {
+                            dbg!(&self.idents);
+                            return Err(Box::new(ParseError {
+                                message: format!("Function Error: {e:?}"),
+                            }));
+                        }
+                    };
                     functions.push(func);
                 }
                 Some(Token::NewLine) => {
@@ -261,10 +283,8 @@ impl Parser {
                     };
                     Ok(Box::new(node))
                 }
-                Some(Token::Assign) | Some(Token::Period) => {
-                    if let Some(Token::Period) = self.peek_token_n(1) {
-                        return self.parse_class_member_assign();
-                    };
+                Some(Token::Period) => self.parse_class_member_access(),
+                Some(Token::Assign) => {
                     self.next_token(); // consume ident
                     self.next_token(); // consume '='
 
@@ -286,7 +306,66 @@ impl Parser {
                 }
                 // TODO: Fill out scope operators
                 Some(Token::ScopeOperator) => {
-                    panic!()
+                    self.next_token();
+                    let right = self.parse_equality()?;
+                    dbg!(&right);
+
+                    let r_as_any = right.as_any();
+
+                    if let Some(function) = r_as_any.downcast_ref::<FunctionCallNode>().cloned() {
+                        let method = Box::new(IdentNode {
+                            name: function.name,
+                        });
+                        let args = function.args;
+                        Ok(Box::new(ClassMethodCall {
+                            object: Box::new(IdentNode { name: ident_name }),
+                            method,
+                            args,
+                        }))
+                    } else {
+                        Err(Box::new(ParseError {
+                            message:
+                                "Expected either a Ident or FunctionCall after scoped operator"
+                                    .to_string(),
+                        }))
+                    }
+                }
+
+                Some(Token::LeftSquareBracket) => {
+                    self.next_token().unwrap();
+                    self.next_token().unwrap();
+                    let index = self.parse_expression()?;
+                    dbg!(&index);
+                    self.expect_token(
+                        &Token::RightSquareBracket,
+                        "Expected ']' before assignment",
+                    )?;
+
+                    let operator = match self.next_token().cloned() {
+                        Some(Token::Assign) => AssignOperator::Assign,
+                        Some(_) => {
+                            return Err(Box::new(ParseError {
+                                message: "Expected assignment operation".to_string(),
+                            }))
+                        }
+
+                        None => {
+                            return Err(Box::new(ParseError {
+                                message: "Expected assignment operation".to_string(),
+                            }))
+                        }
+                    };
+
+                    let array_access_node = Box::new(ArrayAccessNode {
+                        arr_name: Box::new(IdentNode { name: ident_name }),
+                        index,
+                    });
+
+                    Ok(Box::new(ArrayAssignmentNode {
+                        operator,
+                        left: array_access_node,
+                        right: self.parse_expression()?,
+                    }))
                 }
                 _ => Err(Box::new(ParseError {
                     message: format!(
@@ -438,7 +517,7 @@ impl Parser {
             &Token::LeftBrace,
             "Expected Left Brace after method declaration",
         )?;
-        //
+
         // Convert FnData arguments into FunctionArgNodes
         let args = self.convert_method_data_args(&fn_data)?;
         // Parse the statements inside the function body
@@ -456,6 +535,7 @@ impl Parser {
             return_type: Box::new(IdentNode {
                 name: fn_data.return_type.unwrap_or("unit".to_string()),
             }),
+            is_static: args.is_empty(),
             args,
             body,
         }))
@@ -569,64 +649,88 @@ impl Parser {
         self.parse_scope_opers()
     }
 
-    pub fn parse_scope_opers(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
+    fn parse_scope_opers(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
         let mut node = self.parse_equality()?;
 
         loop {
             if self.check_token(&Token::Period) {
-                self.next_token();
+                dbg!(&node);
+                self.next_token(); // Consume the '.'
+
+                // Parse the right-hand side (could be a field or a function call)
                 let right = self.parse_equality()?;
 
-                let r_as_any = right.as_any();
-                let n: Box<dyn AstNode> = if let Some(field_name) =
-                    r_as_any.downcast_ref::<IdentNode>()
-                {
-                    Box::new(ClassFieldAccess {
-                        member: node.clone_box(),
-                        field: Box::new(field_name.clone()),
-                    })
-                } else if let Some(function) = r_as_any.downcast_ref::<FunctionCallNode>().cloned()
-                {
-                    let method = Box::new(IdentNode {
-                        name: function.name,
-                    });
-                    let args = function.args;
-                    Box::new(ClassMethodCall {
-                        member: node.clone_box(),
-                        method,
-                        args,
-                    })
-                } else {
-                    return Err(Box::new(ParseError {
-                        message: "Expected either a Ident or FunctionCall after scoped operator"
-                            .to_string(),
-                    }));
+                // Now we need to check the type of 'node' (the left-hand side)
+                node = match node.as_any().downcast_ref::<IdentNode>() {
+                    Some(ident_node) if ident_node.name == "self" => {
+                        // Special handling for 'self.field'
+                        if let Some(field_name) = right.as_any().downcast_ref::<IdentNode>() {
+                            Box::new(SelfFieldAccessNode {
+                                field: Box::new(field_name.clone()),
+                            })
+                        } else {
+                            return Err(Box::new(ParseError {
+                                message: "Invalid expression after 'self.'".to_string(),
+                            }));
+                        }
+                    }
+                    _ => {
+                        // 'node' is not 'self', so proceed as before
+                        match right.as_any().downcast_ref::<FunctionCallNode>() {
+                            Some(function) => {
+                                // Method call
+                                Box::new(MethodCallNode {
+                                    object: node.clone_box(),
+                                    method: Box::new(IdentNode {
+                                        name: function.name.clone(),
+                                    }),
+                                    args: function.args.clone(),
+                                })
+                            }
+                            None => {
+                                // Not a function call, so it must be a field access
+                                match right.as_any().downcast_ref::<IdentNode>() {
+                                    Some(field_name) => Box::new(ClassFieldAccess {
+                                        member: node.clone_box(),
+                                        field: Box::new(field_name.clone()),
+                                    }),
+                                    None => {
+                                        return Err(Box::new(ParseError {
+                                            message: "Invalid expression after '.'".to_string(),
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 };
-
-                node = n;
             } else if self.check_token(&Token::ScopeOperator) {
-                println!("Scope Operator!");
-                self.next_token();
+                self.next_token(); // Consume the '::'
                 let right = self.parse_equality()?;
 
                 let r_as_any = right.as_any();
 
                 if let Some(function) = r_as_any.downcast_ref::<FunctionCallNode>().cloned() {
-                    let method = Box::new(IdentNode {
-                        name: function.name,
-                    });
-                    let args = function.args;
-                    Box::new(ClassMethodCall {
-                        member: node.clone_box(),
-                        method,
-                        args,
-                    })
+                    // Static method call
+                    // Ensure the left-hand side is an IdentNode (class name)
+                    if let Some(class_name) = node.as_any().downcast_ref::<IdentNode>() {
+                        node = Box::new(StaticMethodCallNode {
+                            class: Box::new(class_name.clone()), // Correctly store IdentNode
+                            method: Box::new(IdentNode {
+                                name: function.name,
+                            }),
+                            args: function.args,
+                        });
+                    } else {
+                        return Err(Box::new(ParseError {
+                            message: "Expected a class name before '::'".to_string(),
+                        }));
+                    }
                 } else {
                     return Err(Box::new(ParseError {
-                        message: "Expected either a Ident or FunctionCall after scoped operator"
-                            .to_string(),
+                        message: "Expected a function call after '::'".to_string(),
                     }));
-                };
+                }
             } else {
                 break;
             }
@@ -649,6 +753,7 @@ impl Parser {
                 });
             } else if self.check_token(&Token::LessEqual) {
                 self.next_token();
+                println!("next: {:?}", self.peek_token());
                 let right = self.parse_add_sub()?;
                 node = Box::new(BinaryOpNode {
                     operator: BinaryOperator::LessEqual,
@@ -770,35 +875,19 @@ impl Parser {
             // This will try to match a ArrayLiteral
             Some(Token::LeftSquareBracket) => {
                 self.next_token();
+                match self.peek_token().cloned() {
+                    Some(Token::Ident(_)) => self.parse_array_literal(),
 
-                let Some(Token::Ident(arr_type)) = self.next_token().cloned() else {
-                    return Err(Box::new(ParseError {
-                        message: "Expected Ident for array type".to_string(),
-                    }));
-                };
-
-                self.expect_token(&Token::Colon, "Expected Colon after array type")?;
-
-                let mut values: Vec<Box<dyn AstNode>> = Vec::new();
-                while !matches!(self.peek_token(), Some(&Token::RightSquareBracket)) {
-                    let Some(tok) = self.peek_token() else {
-                        return Err(Box::new(ParseError { message: "Failed to get next token, when right square bracket has not yet been seen".to_string() }));
-                    };
-                    if let Token::Comma = tok {
-                        self.next_token();
-                        continue;
-                    }
-
-                    values.push(self.parse_expression()?);
+                    Some(_) => Err(Box::new(ParseError {
+                        message: format!(
+                            "Expected array access or array literal, got: {:?}",
+                            self.peek_token()
+                        ),
+                    })),
+                    None => Err(Box::new(ParseError {
+                        message: "Could not get next token".to_string(),
+                    })),
                 }
-
-                self.next_token(); // Consume Right Square Bracket
-
-                let arr_type = Box::new(IdentNode {
-                    name: arr_type.to_string(),
-                });
-
-                Ok(Box::new(ArrayLiteralNode { arr_type, values }))
             }
             Some(Token::Ident(name)) => {
                 match self.peek_token_n(1) {
@@ -822,8 +911,8 @@ impl Parser {
                             .cloned()
                             .unwrap();
 
-                        Ok(Box::new(ClassMethodCall {
-                            member: Box::new(IdentNode { name }),
+                        Ok(Box::new(StaticMethodCallNode {
+                            class: Box::new(IdentNode { name }),
                             method: Box::new(IdentNode {
                                 name: parsed_fn_invoke.name,
                             }),
@@ -835,17 +924,26 @@ impl Parser {
 
                     Some(&Token::LeftSquareBracket) => self.parse_array_access(),
 
-                    Some(&Token::Period) => self.parse_class_member_access(),
+                    Some(&Token::Period) => {
+                        // Identifier followed by a Period (.)
+                        // self.next_token(); // Consume the identifier
+                        // self.next_token(); // Consume the '.'
 
+                        if name == "self" {
+                            self.parse_self_field_access()
+                        } else {
+                            self.parse_class_member_access()
+                        }
+                    }
+
+                    // Return value of Ident otherwise
                     _ => {
-                        // Just an identifier as a factor
                         self.next_token();
-                        Ok(Box::new(IdentNode {
-                            name: name.to_string(),
-                        }))
+                        Ok(Box::new(IdentNode { name }))
                     }
                 }
             }
+
             Some(Token::FunctionInvocation(inv)) => {
                 // Direct function invocation token
                 if let Some(Token::Period) = self.peek_token_n(1).cloned() {
@@ -874,6 +972,58 @@ impl Parser {
         }
     }
 
+    // Helper function to parse 'self.field' accesses
+    fn parse_self_field_access(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
+        self.next_token(); // Consume 'self'
+        self.next_token(); // Consume '.'
+        if let Some(Token::Ident(field_name)) = self.next_token() {
+            Ok(Box::new(SelfFieldAccessNode {
+                field: Box::new(IdentNode {
+                    name: field_name.to_string(),
+                }),
+            }))
+        } else {
+            Err(Box::new(ParseError {
+                message: "Expected field name after 'self.'".to_string(),
+            }))
+        }
+    }
+
+    fn parse_array_literal(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
+        let Some(Token::Ident(arr_type)) = self.next_token().cloned() else {
+            return Err(Box::new(ParseError {
+                message: "Expected Ident for array type".to_string(),
+            }));
+        };
+
+        self.expect_token(&Token::Colon, "Expected Colon after array type")?;
+
+        let mut values: Vec<Box<dyn AstNode>> = Vec::new();
+        while !matches!(self.peek_token(), Some(&Token::RightSquareBracket)) {
+            let Some(tok) = self.peek_token() else {
+                return Err(Box::new(ParseError {
+                    message:
+                        "Failed to get next token, when right square bracket has not yet been seen"
+                            .to_string(),
+                }));
+            };
+            if let Token::Comma = tok {
+                self.next_token();
+                continue;
+            }
+
+            values.push(self.parse_expression()?);
+        }
+
+        self.next_token(); // Consume Right Square Bracket
+
+        let arr_type = Box::new(IdentNode {
+            name: arr_type.to_string(),
+        });
+
+        Ok(Box::new(ArrayLiteralNode { arr_type, values }))
+    }
+
     /// Parse indexing operator
     fn parse_array_access(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
         let Some(Token::Ident(var_name)) = self.next_token().cloned() else {
@@ -886,6 +1036,8 @@ impl Parser {
 
         let index = self.parse_expression()?;
 
+        self.expect_token(&Token::RightSquareBracket, "Expected Right Square Bracket")?;
+
         Ok(Box::new(ArrayAccessNode {
             arr_name: Box::new(IdentNode { name: var_name }),
             index,
@@ -893,18 +1045,76 @@ impl Parser {
     }
 
     fn parse_class_member_access(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
-        let Some(Token::Ident(var_name)) = self.next_token().cloned() else {
+        let Some(Token::Ident(var_name)) = self.peek_token().cloned() else {
             return Err(Box::new(ParseError {
-                message: "Expected Token for var name".to_string(),
+                message: format!(
+                    "Expected Ident for member access, got {:?}",
+                    self.peek_token()
+                ),
             }));
         };
 
+        self.next_token(); // Actually consume the Ident token
+
         self.expect_token(&Token::Period, "Expected Period")?;
 
-        Ok(Box::new(ClassFieldAccess {
+        let field: Box<dyn AstNode> = match self.next_token().cloned() {
+            Some(Token::Ident(var_name)) => Box::new(IdentNode { name: var_name }),
+
+            Some(Token::FunctionInvocation(fn_invoke)) => {
+                let fn_decl_as_any = self.parse_function_invocation(&fn_invoke)?;
+
+                let fn_decl = fn_decl_as_any
+                    .as_any()
+                    .downcast_ref::<FunctionCallNode>()
+                    .unwrap();
+
+                Box::new(ClassMethodCall {
+                    object: Box::new(IdentNode {
+                        name: var_name.clone(),
+                    }),
+                    method: Box::new(IdentNode {
+                        name: fn_decl.name.clone(),
+                    }),
+                    args: fn_decl.args.clone(),
+                })
+            }
+
+            Some(tok) => {
+                return Err(Box::new(ParseError {
+                    message: format!(
+                        "Expected either an Ident or FnInvoke as class field, got {:?}",
+                        tok
+                    ),
+                }));
+            }
+
+            None => {
+                return Err(Box::new(ParseError {
+                    message: "Expected either an Ident or FnInvoke as class field, but no more tokens left?!".to_string()
+                }));
+            }
+        };
+
+        // Parse as a regular field access
+        let class_field_node = Box::new(ClassFieldAccess {
             member: Box::new(IdentNode { name: var_name }),
-            field: self.parse_expression()?,
-        }))
+            field,
+        });
+
+        if let Some(Token::Assign) = self.peek_token().cloned() {
+            self.next_token(); // Consume '='
+
+            let right = self.parse_expression()?;
+
+            Ok(Box::new(AssignmentNode {
+                operator: AssignOperator::Assign,
+                left: class_field_node,
+                right,
+            }))
+        } else {
+            Ok(class_field_node)
+        }
     }
 
     /// Parse initialization of class via Left Brace
@@ -948,7 +1158,7 @@ impl Parser {
 
             self.expect_token(&Token::Colon, "Expected Colon after class field")?;
 
-            let right = self.parse_expression()?;
+            let right = self.parse_argument_value()?;
 
             if let Some(&Token::Comma) = self.peek_token() {
                 self.next_token();
@@ -970,6 +1180,64 @@ impl Parser {
             }),
             args,
         }))
+    }
+
+    // Add a new helper function to parse argument values
+    fn parse_argument_value(&mut self) -> Result<Box<dyn AstNode>, Box<dyn Error>> {
+        let mut tokens = Vec::new();
+        let mut nested_parens = 0;
+
+        while let Some(token) = self.peek_token() {
+            match token {
+                Token::LeftSquareBracket | Token::LeftBrace | Token::LeftBracket => {
+                    nested_parens += 1;
+                    tokens.push(token.clone());
+                    self.next_token();
+                }
+
+                Token::RightSquareBracket | Token::RightBracket => {
+                    nested_parens -= 1;
+                    tokens.push(token.clone());
+                    self.next_token();
+                }
+
+                Token::Comma => {
+                    if nested_parens == 0 {
+                        break;
+                    } else {
+                        tokens.push(token.clone());
+                        self.next_token();
+                    }
+                }
+
+                Token::RightBrace => {
+                    if nested_parens == 0 {
+                        break;
+                    } else {
+                        tokens.push(token.clone());
+                        self.next_token();
+                    }
+                }
+                _ => {
+                    tokens.push(token.clone());
+                    self.next_token();
+                }
+            }
+        }
+
+        if tokens.is_empty() {
+            return Err(Box::new(ParseError {
+                message: "Expected argument value".to_string(),
+            }));
+        }
+
+        if *tokens.last().unwrap() == Token::Comma {
+            tokens.remove(tokens.len() - 1);
+        }
+
+        // Parse the collected tokens as an expression
+        let mut parser = Parser::new(tokens);
+        parser.parse_expression()
     }
 
     /// Parse a while block

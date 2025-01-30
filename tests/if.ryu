@@ -10,14 +10,14 @@ fn check_cond() => bool {
 
 fn main() {
   let name: string = return_name()
-  print(name == "mateo")
-  if name == "mateo" {
-    print("GOD!")
+  println(name == "mateo")
+  if (name == "mateo") {
+    println("GOD!")
   } else {
-    print("Fake prophet...")
+    println("Fake prophet...")
   }
 
   if check_cond() {
-    print("TRUE!")
+    println("TRUE!")
   }
 }
